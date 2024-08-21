@@ -20,7 +20,7 @@ def preprocess_data(model,data):
 	states=[]
 	for i in range(len(data["time"])):
 		states.append({})
-		for vari in ["u_component_of_wind","v_component_of_wind","temperature"]:
+		for vari in ["u_component_of_wind","v_component_of_wind","temperature","specific_humidity"]:
 			states[i][vari]=pressure_to_sigma(data["surface_pressure"][i].values,
 											 data["level"].values,model.sigmas,data[vari][i].values)
 

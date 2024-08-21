@@ -5,7 +5,7 @@ TensorDynamics is an atmospheric dynamical core implemented in Tensorflow for us
 Examples: baroclinic_instability.ipynb, ERA5_forecasting.ipynb
 
 
-TODO: Creation of non-uniform sigma levels. Stable generation of associated legendre functions for high truncation limits. Held-Suarez test case. Wet dynamics and tracer transport. Test autodifferentiation.
+TODO: Held-Suarez test case. Physical parameterizations for convection and radiation. Test autodifferentiation.
 
 
 Model formulation is based on relevant section in the following sources:

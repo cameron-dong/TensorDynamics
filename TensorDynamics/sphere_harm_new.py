@@ -1,24 +1,10 @@
 import tensorflow as tf
 import numpy as np
-from scipy.special import factorial, roots_legendre, lpmv
+from scipy.special import roots_legendre
 import TensorDynamics.constants as constants
+import jax
 
-a=constants.A_EARTH #radius of earth
-
-
-def factorial_new(i):
-	'''
-	# new factorial definition to deal with negative inputs, "i" may be an array of numbers
-
-	Args:
-		i: np.array of values, may be positive or negative
-	Returns:
-		tmp: np.array of output factorials for each value in "i"
-	'''
-	result=factorial(np.abs(i).astype(np.double),exact=False)
-	result[i<0]*=((-1.)**i[i<0])
-	return result
-
+A=constants.A_EARTH #radius of earth
 
 def leg_AS(m,n,mu):
 	'''
@@ -37,11 +23,31 @@ def leg_AS(m,n,mu):
 	mu=np.array(mu)
 	n=np.array(n)
 
-	# calculate normalized values, cast back to tf tensor
-	constants=(np.emath.sqrt((2.*n+1.)*factorial_new(n-m)/2./factorial_new(n+m)))
-	out=constants*(lpmv(m,n,np.double(mu))/((-1)**m))
+	# calculate legendre function values for nonnegative integers
+	max_mn=np.max([m,n])
+	tmp_vals=jax.scipy.special.lpmn_values(max_mn,max_mn,mu[:,0,0],is_normalized=True)
+	tmp_vals=np.moveaxis(tmp_vals,[0,1,2],[2,1,0])
 
-	legfuncs=tf.constant(np.single(np.real(out)),dtype=np.csingle)
+	# create placeholder output array of zeros
+	output=np.zeros((len(mu),len(n),len(m)))
+	uniq_n=np.sort(np.unique(n)).astype(int)
+	uniq_m=np.sort(np.unique(m)).astype(int)
+
+	# insert correct values for nonnegative wavenumbers
+	if np.min(n)<0:
+		nstart=int(-np.min(n))
+	else:
+		nstart=0
+	if np.min(m)<0:
+		mstart=int(-np.min(m))
+	else:
+		mstart=0
+	output[:,nstart:,mstart:]=tmp_vals[:,uniq_n[nstart]:uniq_n[-1]+1,uniq_m[mstart]:uniq_m[-1]+1]
+		
+	# add correct scaling for orthonormalization, correct sign	
+	scaling=(1./np.sqrt(2))/jax.scipy.special.lpmn_values(0,0,np.array([0.]),is_normalized=True)
+	legfuncs=tf.constant(output*scaling*(-1)**m,dtype=np.csingle)
+
 	return legfuncs
 
 
@@ -95,11 +101,10 @@ def calc_am_u(data,trunc):
 		fourier_coeffs: tensor with dimensions (level, latitude, zonal wavenumber)
 
 	'''
-
 	fourier_coeffs=tf.signal.rfft(data)[:,:,:trunc+1]
 	return fourier_coeffs
 
-def calc_UV(U_amn,V_amn,m,n,psi_amn,chi_amn,trunc=tf.constant(42)):
+def calc_UV(m,n,psi_amn,chi_amn,trunc=tf.constant(42)):
 	'''
 	Compute spherical harmonic coefficients of U, V from coefficients
 	of streamfunction and velocity potential, using recursion relations
@@ -114,7 +119,7 @@ def calc_UV(U_amn,V_amn,m,n,psi_amn,chi_amn,trunc=tf.constant(42)):
 		trunc: integer truncation limit
 
 	Returns:
-		Spherical harmonic coefficients for U,V are updated in place
+		wind: dictionary with Spherical harmonic coefficients for U,V as tf.tensor's
 
 	'''
 	# note that psi_amn and chi_amn should have a truncation of one less that that for U,V
@@ -128,22 +133,24 @@ def calc_UV(U_amn,V_amn,m,n,psi_amn,chi_amn,trunc=tf.constant(42)):
 	eps_plus=(tf.math.pow((((n+1)**2-m**2)/(4*(n+1)**2-1)),0.5))
 	eps_min=(tf.math.pow((((n)**2-m**2)/(4*(n)**2-1)),0.5))
 
-	# First set to zero
-	U_amn.assign(tf.zeros(tf.shape(U_amn),dtype=np.csingle))
-	V_amn.assign(tf.zeros(tf.shape(V_amn),dtype=np.csingle))
-
 	# add values corresponding to zonal derivative
-	U_amn[:,:trunc+1,:trunc+1].assign(1j*m[:trunc+1,:trunc+1]*chi_amn)
-	V_amn[:,:trunc+1,:trunc+1].assign(1j*m[:trunc+1,:trunc+1]*psi_amn)
-
+	pad_1=tf.constant([[0,0],[0,1],[0,1]])
+	U_amn= tf.pad(1j*m[:trunc+1,:trunc+1]*chi_amn,pad_1)
+	V_amn= tf.pad(1j*m[:trunc+1,:trunc+1]*psi_amn,pad_1)
 
 	#add values for recursive relations of meridional derivative
-	U_amn[:,1:,:trunc+1].assign(U_amn[:,1:,:trunc+1]+(n[1:,:trunc+1]-1)*eps_min[1:,:trunc+1]*psi_amn)
-	V_amn[:,1:,:trunc+1].assign(V_amn[:,1:,:trunc+1]-(n[1:,:trunc+1]-1)*eps_min[1:,:trunc+1]*chi_amn)
-	U_amn[:,:trunc,:trunc+1].assign(U_amn[:,:trunc,:trunc+1]-(n[:trunc,:trunc+1]+2)*eps_plus[:trunc,:trunc+1]*psi_amn[:,1:,:])
-	V_amn[:,:trunc,:trunc+1].assign(V_amn[:,:trunc,:trunc+1]+(n[:trunc,:trunc+1]+2)*eps_plus[:trunc,:trunc+1]*chi_amn[:,1:,:])
+	pad_2=tf.constant([[0,0],[1,0,],[0,1]])
+	U_amn=U_amn + tf.pad((n[1:,:trunc+1]-1)*eps_min[1:,:trunc+1]*psi_amn,pad_2)
+	V_amn=V_amn - tf.pad((n[1:,:trunc+1]-1)*eps_min[1:,:trunc+1]*chi_amn,pad_2)
 
-	return None
+	pad_3=tf.constant([[0,0],[0,2],[0,1]])
+	U_amn=U_amn-tf.pad((n[:trunc,:trunc+1]+2)*eps_plus[:trunc,:trunc+1]*psi_amn[:,1:,:],pad_3)
+	V_amn=V_amn+tf.pad((n[:trunc,:trunc+1]+2)*eps_plus[:trunc,:trunc+1]*chi_amn[:,1:,:],pad_3)
+
+
+	wind={"U_amn":U_amn, "V_amn":V_amn}
+
+	return wind
 
 
 class sh_obj:
@@ -273,7 +280,7 @@ class sh_obj:
 			laplace_vals: tensor with dimensions (level, zonal wavenumber, total wavenumber)
 		"""
 
-		laplace_vals=amn*tf.cast(tf.cast(-self.n*(self.n+1),np.single)/a/a,np.csingle)**order
+		laplace_vals=amn*tf.cast(tf.cast(-self.n*(self.n+1),np.single)/A/A,np.csingle)**order
 		return laplace_vals
 	
 	def x_deriv(self,amn):
@@ -286,7 +293,7 @@ class sh_obj:
 		Returns:
 			tensor with dimensions (level, latitude, longitude)
 		"""
-		return self.eval(self.lambda_deriv(amn),self.legfuncs)/tf.math.cos(self.lats)[None,:,None]/a
+		return self.eval(self.lambda_deriv(amn),self.legfuncs)/tf.math.cos(self.lats)[None,:,None]/A
 		
 	def y_deriv(self,amn):
 		"""
@@ -298,7 +305,7 @@ class sh_obj:
 		Returns:
 			tensor with dimensions (level, latitude, longitude)
 		"""
-		return self.eval(amn, self.phiderivs)/a
+		return self.eval(amn, self.phiderivs)/A
 	
 	def gradient(self,amn):
 		"""
@@ -324,6 +331,7 @@ class sh_obj:
 		Returns:
 			inv_laplace_vals: tensor with dimensions (level, zonal wavenumber, total wavenumber)
 		"""
-		inv_laplace_vals=tf.Variable(amn[:]*0)
-		inv_laplace_vals[:,1:].assign(amn[:,1:]/tf.cast(tf.cast(-self.n[1:]*(self.n[1:]+1),np.single)/a/a,np.csingle))
+		newvals=amn[:,1:]/tf.cast(tf.cast(-self.n[1:]*(self.n[1:]+1),np.single)/A/A,np.csingle)
+		padding=tf.constant([[0,0],[1,0],[0,0]])
+		inv_laplace_vals=tf.pad(newvals,padding)
 		return inv_laplace_vals

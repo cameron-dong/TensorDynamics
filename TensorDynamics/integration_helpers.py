@@ -11,6 +11,7 @@ A2=A*A
 R=constants.DRY_AIR_CONST # gas constant
 kb=constants.KAPPA # scaled gas constant by specific heat
 
+
 def mat_mul_4(matB,matA):
 	"""
 	Performs matrix multiplication for 4-D tensors whose last 2 dimensions are (total wavenumber, zonal wavenumber).
@@ -34,6 +35,7 @@ def mat_mul_2(matB,matA):
 		tensor with dimensions (None, level, total wavenumber, zonal wavenumber)
 	"""
 	return tf.transpose(tf.linalg.matmul(tf.cast(tf.transpose(matB,[0,1]),np.csingle),tf.transpose(matA,[2,3,1,0])),[3,2,0,1])
+
 
 def to_grid_space(m_obj,state):
 	"""
@@ -64,15 +66,18 @@ def to_grid_space(m_obj,state):
 	T=(f_obj.eval(state["T_amn"],f_obj.legfuncs))
 	T_prime=(T-m_obj.T_barw)
 
+	Q = f_obj.eval(state["Q_amn"],f_obj.legfuncs)
+	lps = f_obj.eval(state["lps_amn"],f_obj.legfuncs)
+
 	# calculate derivatives of log(Ps) with respect to mu and lambda
 	dlps_dmu=(f_obj.eval(state["lps_amn"],f_obj.legderivs))
 	dlps_dlam=(f_obj.eval(f_obj.lambda_deriv(state["lps_amn"]),f_obj.legfuncs))
 
 	# first calculate U, V spectral coefficients, then evaluate to grid space
-	sh.calc_UV(state["U_amn"], state["V_amn"],m_obj.UV_obj.m,m_obj.UV_obj.n,state["psi_amn"],state["chi_amn"],trunc=m_obj.f_obj.trunc)
-	U_data=(m_obj.UV_obj.eval(state["U_amn"],m_obj.UV_obj.legfuncs)*A)
-	V_data=(m_obj.UV_obj.eval(state["V_amn"],m_obj.UV_obj.legfuncs)*A)
-	return  vorticity, divergence, T_prime, dlps_dmu, dlps_dlam, U_data, V_data
+	wind = sh.calc_UV(m_obj.UV_obj.m,m_obj.UV_obj.n,state["psi_amn"],state["chi_amn"],trunc=m_obj.f_obj.trunc)
+	U_data=(m_obj.UV_obj.eval(wind["U_amn"],m_obj.UV_obj.legfuncs)*A)
+	V_data=(m_obj.UV_obj.eval(wind["V_amn"],m_obj.UV_obj.legfuncs)*A)
+	return  vorticity, divergence, T_prime, dlps_dmu, dlps_dlam, U_data, V_data, Q
 
 
 def get_Gk(sh_obj,divergence,dlps_dlam,U_data,dlps_dmu,V_data):
@@ -174,7 +179,7 @@ def vertical_diff(m_obj,data,sig):
 			+sig[1:]*(tfg(data,pinds)-data)/(tfg(m_obj.dsigs,pinds)[:,None,None]+m_obj.dsigs[:,None,None]))
 
 
-def do_vdiffs(m_obj,U_data,V_data,T_prime,sig_tot,sig_adv):
+def do_vdiffs(m_obj,U_data,V_data,T_prime,Q,sig_tot,sig_adv):
 	"""
 	Calculate the vertical advection terms for various variables
 	Args:
@@ -195,13 +200,15 @@ def do_vdiffs(m_obj,U_data,V_data,T_prime,sig_tot,sig_adv):
 	V_vert=(vertical_diff(m_obj,V_data,sig_tot))
 	U_vert=(vertical_diff(m_obj,U_data,sig_tot))
 	T_prime_vert=(vertical_diff(m_obj,T_prime,sig_tot))
+	Q_vert=(vertical_diff(m_obj,Q,sig_tot))
 
 	# vertical advection due to vertical velocity calculated solely from horizontal velocity
 	Tbar_vert=(vertical_diff(m_obj,m_obj.T_barw,sig_adv))
 
-	return V_vert, U_vert, T_prime_vert,Tbar_vert
+	return V_vert, U_vert, T_prime_vert,Tbar_vert, Q_vert
 
-def grid_space_transform(m_obj,U_data,V_data,vorticity,divergence,U_vert,V_vert,T_prime,T_prime_vert,Tbar_vert,dlps_dmu,dlps_dlam,trip_tot,trip_adv):
+
+def grid_space_transform(m_obj,U_data,V_data,vorticity,divergence,U_vert,V_vert,T_prime,T_prime_vert,Tbar_vert,Q,Q_vert,dlps_dmu,dlps_dlam,trip_tot,trip_adv):
 	"""
 	Calculate product of nonlinear terms in grid space
 
@@ -224,15 +231,24 @@ def grid_space_transform(m_obj,U_data,V_data,vorticity,divergence,U_vert,V_vert,
 		Various tensors representing the nonlinear products in grid space
 	"""
 
-	A_gs=(U_data*(vorticity+m_obj.f)+V_vert+R*T_prime/A*dlps_dmu*m_obj.coslats**2)
-	B_gs=(V_data*(vorticity+m_obj.f)-U_vert-R*T_prime/A*dlps_dlam)
+	Tv_prime = T_prime + (T_prime+m_obj.T_barw)*Q
+
+	#############
+
+	A_gs=(U_data*(vorticity+m_obj.f)+V_vert+R*Tv_prime/A*dlps_dmu*m_obj.coslats**2)
+	B_gs=(V_data*(vorticity+m_obj.f)-U_vert-R*Tv_prime/A*dlps_dlam)
 	C_gs=(U_data*T_prime)
 	D_gs=(V_data*T_prime)
 	E_gs=((U_data*U_data+V_data*V_data)/2.)
-	F_gs=(T_prime*divergence - T_prime_vert -Tbar_vert +kb*(T_prime*trip_tot +m_obj.T_barw[:]*trip_adv))
-	return A_gs,B_gs,C_gs,D_gs,E_gs,F_gs
+	F_gs=(T_prime*divergence - T_prime_vert -Tbar_vert +kb*(Tv_prime*trip_tot +m_obj.T_barw[:]*trip_adv))
 
-def do_ffts(sh_obj,A_gs,B_gs,C_gs,D_gs,E_gs,F_gs,H_gs):
+	J_gs= U_data*Q
+	K_gs= V_data*Q
+	L_gs= Q*divergence - Q_vert
+
+	return A_gs,B_gs,C_gs,D_gs,E_gs,F_gs, J_gs, K_gs, L_gs
+
+def do_ffts(sh_obj,A_gs,B_gs,C_gs,D_gs,E_gs,F_gs,H_gs, J_gs, K_gs, L_gs):
 	"""
 	Calculate zonal fourier coefficients of nonlinear terms
 
@@ -250,7 +266,11 @@ def do_ffts(sh_obj,A_gs,B_gs,C_gs,D_gs,E_gs,F_gs,H_gs):
 	Em=(sh.calc_am_u(E_gs,sh_obj.trunc))
 	Fm=(sh.calc_am_u(F_gs,sh_obj.trunc))
 	Hm=(sh.calc_am_u(H_gs,sh_obj.trunc))
-	return Am, Bm, Cm, Dm, Em, Fm, Hm
+
+	Jm=(sh.calc_am_u(J_gs,sh_obj.trunc))
+	Km=(sh.calc_am_u(K_gs,sh_obj.trunc))
+	Lm=(sh.calc_am_u(L_gs,sh_obj.trunc))
+	return Am, Bm, Cm, Dm, Em, Fm, Hm, Jm, Km, Lm
 
 def G(Rm,Sm,sh_obj):
 	"""
@@ -268,7 +288,7 @@ def G(Rm,Sm,sh_obj):
 		/(tf.cast(1.,np.csingle)-tf.cast(sh_obj.mu[None,:,None,None],np.csingle)**2)-Sm[:,:,None,:]*sh_obj.legderivs[None,:,:,:],sh_obj.weights[:,:,:,None])
 
 
-def do_gauss_quad(m_obj,Am,Bm,Cm,Dm,Em,Fm,Hm):
+def do_gauss_quad(m_obj,Am,Bm,Cm,Dm,Em,Fm,Hm, Jm, Km, Lm):
 	"""
 	Perform (meridional) gaussian quadrature of the fourier coefficients
 
@@ -291,5 +311,9 @@ def do_gauss_quad(m_obj,Am,Bm,Cm,Dm,Em,Fm,Hm):
 		
 	Fmn=(sh.gauss_quad(Fm[:,:,None,:]*f_obj.legfuncs[None,:,:,:],f_obj.weights[:,:,:,None]))
 	Hmn=(sh.gauss_quad(Hm[:,:,None,:]*f_obj.legfuncs[None,:,:,:],f_obj.weights[:,:,:,None]))
-	return G_psi, G_chi, G_T_prime, Emn, Fmn, Hmn
+	Lmn=(sh.gauss_quad(Lm[:,:,None,:]*f_obj.legfuncs[None,:,:,:],f_obj.weights[:,:,:,None]))
+
+	G_Q = (G(Jm,Km,f_obj))
+	
+	return G_psi, G_chi, G_T_prime, Emn, Fmn, Hmn, G_Q, Lmn
 
