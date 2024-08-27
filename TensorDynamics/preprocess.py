@@ -1,3 +1,5 @@
+''' Processes initial data from xarray.Dataset onto the appropriate grid'''
+
 import numpy as np
 from TensorDynamics.vertical_interpolation import pressure_to_sigma
 

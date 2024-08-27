@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 
-
 def pressure_to_sigma(PS,pressures,sigmas, ys):
 	"""
 	Vertical linear interpolation from pressure to sigma coordinates

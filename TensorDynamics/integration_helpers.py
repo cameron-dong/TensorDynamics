@@ -1,11 +1,10 @@
+'''Helper functions for matrix multiplication and calculation of explicity treated time tendencies'''
 
 import numpy as np
-
-import time as time
 import tensorflow as tf
-
 import TensorDynamics.sphere_harm_new as sh
 import TensorDynamics.constants as constants
+
 A=constants.A_EARTH
 A2=A*A
 R=constants.DRY_AIR_CONST # gas constant

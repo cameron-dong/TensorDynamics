@@ -1,8 +1,10 @@
+''' wrappers for time integration methods, which calculate time tendencies then perform appropriate time step'''
+
 import numpy as np
 import tensorflow as tf
 
-from TensorDynamics.time_integration import euler, leap, rate_of_change, physics, euler_BE, explicit_step, add_diffusion_tend, perform_diffusion, linear
-
+from TensorDynamics.time_integration import euler, leap, euler_BE, explicit_step,  perform_diffusion
+from TensorDynamics.get_tendencies  import rate_of_change, physics, add_diffusion_tend, linear
 ##########################################################################################################################
 do_jit=True
 
@@ -23,51 +25,81 @@ def leap_step(m_obj,dt,state,old):
 	"""
 	
 	# calculate explicit terms
-	dchi, dpsi, dT, dlps, dq = rate_of_change(m_obj,state)
+	explicit_derivs = rate_of_change(m_obj,state)
 
+	# add physics tendencies
 	if m_obj.do_physics:
-		dq_phys, dT_phys = physics(m_obj,state)		
-		dq=dq+dq_phys
-		dT=dT+dT_phys
+		p_derivs = physics(m_obj,old)		
+		
+		for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			explicit_derivs[vari]=explicit_derivs[vari]+p_derivs[vari[:-4]]
 
 	# placeholder values
 	tmp_old={}
-	tmp_old["chi_amn"]=tf.identity(state["chi_amn"])
-	tmp_old["psi_amn"]=tf.identity(state["psi_amn"])
-	tmp_old["T_amn"]=tf.identity(state["T_amn"])
-	tmp_old["lps_amn"]=tf.identity(state["lps_amn"])
-	tmp_old["Q_amn"]=tf.identity(state["Q_amn"])
-	tmp_old["Zs_amn"]=tf.identity(state["Zs_amn"])
+	for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+		tmp_old[vari]=tf.identity(state[vari])
 	
 	# do semi-implicit leapfrog step
-	state=leap(m_obj,state,old,dT,dlps,dchi,dpsi,dq,tf.cast(dt,np.csingle))
+	state=leap(m_obj,state,old,explicit_derivs,tf.cast(dt,np.csingle))
 	state=perform_diffusion(m_obj,state,tf.cast(dt,np.csingle))
+
 	# asselin-roberts-williams filtering
 	sig=0.53
 	eta=0.03
 	out_old={}
-	f=(old["psi_amn"]-2*tmp_old["psi_amn"]+state["psi_amn"])
-	out_old["psi_amn"]=(tmp_old["psi_amn"]+sig*eta*f)
-	state["psi_amn"]=state["psi_amn"]-(1-sig)*eta*f
-
-	f=(old["T_amn"]-2*tmp_old["T_amn"]+state["T_amn"])
-	out_old["T_amn"]=(tmp_old["T_amn"]+sig*eta*f)
-	state["T_amn"]=state["T_amn"]-(1-sig)*eta*f
-	
-	f=(old["chi_amn"]-2*tmp_old["chi_amn"]+state["chi_amn"])
-	out_old["chi_amn"]=(tmp_old["chi_amn"]+sig*eta*f)
-	state["chi_amn"]=state["chi_amn"]-(1-sig)*eta*f
-
-	f=(old["lps_amn"]-2*tmp_old["lps_amn"]+state["lps_amn"])
-	out_old["lps_amn"]=(tmp_old["lps_amn"]+sig*eta*f)
-	state["lps_amn"]=state["lps_amn"]-(1-sig)*eta*f
-
-	f=(old["Q_amn"]-2*tmp_old["Q_amn"]+state["Q_amn"])
-	out_old["Q_amn"]=(tmp_old["Q_amn"]+sig*eta*f)
-	state["Q_amn"]=state["Q_amn"]-(1-sig)*eta*f
-
+	for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+		f=(old[vari]-2*tmp_old[vari]+state[vari])
+		out_old[vari]=(tmp_old[vari]+sig*eta*f)
+		state[vari]=state[vari]-(1-sig)*eta*f
 	out_old["Zs_amn"]=old["Zs_amn"]
+
 	return state, out_old
+
+#############################
+
+@tf.function(jit_compile=do_jit)
+def heuns_step(m_obj,dt,state):
+	"""
+	Performs modified euler step
+
+	Args:
+		m_obj: model object
+		dt (float): value of timestep in seconds
+		state (dict): tf.tensor's with current spherical harmonic coefficients
+
+	Returns:
+		state (dict): tf.tensor's with updated spherical harmonic coefficients
+	"""
+	# calculate explicit terms
+	explicit_derivs = rate_of_change(m_obj,state)
+	if m_obj.do_physics:
+		p_derivs = physics(m_obj,state)		
+		for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			explicit_derivs[vari]=explicit_derivs[vari]+p_derivs[vari[:-4]]
+
+	# perform initial step with euler forward for explicit terms and euler backward for implicit
+	newstate=euler_BE(m_obj,state,explicit_derivs,tf.cast(dt,np.csingle),m_obj.imp_inv)
+
+	# calculated averaged rate of change for the linear terms
+	l_derivs = linear(m_obj,state)
+	l_derivs_2 = linear(m_obj,newstate)
+
+	# use initial step to update the rate of change for the nonlinear terms
+	explicit_derivs2 = rate_of_change(m_obj,newstate)
+	if m_obj.do_physics:
+		for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			explicit_derivs2[vari]=(explicit_derivs2[vari]+p_derivs[vari[:-4]])
+
+	# average derivative values from previous step and prediction
+	total_derivs={}
+	for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			total_derivs[vari]=(explicit_derivs2[vari]+explicit_derivs[vari]+l_derivs_2[vari]+l_derivs[vari])/2
+
+
+	# do a fully explicit step using new rate of change
+	state=explicit_step(m_obj,state,total_derivs,tf.cast(dt,np.csingle))
+
+	return state
 
 #######################################################################################################
 
@@ -86,7 +118,7 @@ def euler_step(m_obj,dt,state):
 	"""
 	
 	# calculate explicit terms
-	dchi, dpsi, dT, dlps, dq = rate_of_change(m_obj,state)
+	explicit_derivs = rate_of_change(m_obj,state)
 	
 	if m_obj.do_physics:
 		dq_phys, dT_phys = physics(m_obj,state)
@@ -94,7 +126,7 @@ def euler_step(m_obj,dt,state):
 		dT=dT+dT_phys
 	
 	# do semi-implicit forward euler step
-	state=euler(m_obj,state,dT,dlps,dchi,dpsi,dq,tf.cast(dt,np.csingle),m_obj.imp_inv_eul)
+	state=euler(m_obj,state,explicit_derivs,tf.cast(dt,np.csingle),m_obj.imp_inv_eul)
 	return state
 ##################################################################################################
 
@@ -133,7 +165,7 @@ def SIL3(m_obj,dt,state):
 
 	####################### FIRST CYCLE
 	# calculate explicit terms
-	dchi, dpsi, dT, dlps, dq = rate_of_change(m_obj,state)
+	explicit_derivs = rate_of_change(m_obj,state)
 	dchi, dpsi, dT, dlps, dq = add_diffusion_tend(m_obj,state,dchi, dpsi, dT, dlps, dq)
 	if m_obj.do_physics:
 		dq_phys, dT_phys = physics(m_obj,state)
@@ -211,55 +243,5 @@ def SIL3(m_obj,dt,state):
 
 	state=euler_BE(m_obj,state,dT,dlps,dchi,dpsi,dq,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
 	
-	return state
-
-#############################
-
-
-@tf.function(jit_compile=do_jit)
-def heuns_step(m_obj,dt,state):
-	"""
-	Performs modified euler step
-
-	Args:
-		m_obj: model object
-		dt (float): value of timestep in seconds
-		state (dict): tf.tensor's with current spherical harmonic coefficients
-
-	Returns:
-		state (dict): tf.tensor's with updated spherical harmonic coefficients
-	"""
-	# calculate explicit terms
-	dchi, dpsi, dT, dlps, dq = rate_of_change(m_obj,state)
-	if m_obj.do_physics:
-		dq_phys, dT_phys = physics(m_obj,state)
-		dq=dq+dq_phys
-		dT=dT+dT_phys
-
-	# perform initial step with euler forward for explicit terms and euler backward for implicit
-	newstate=euler_BE(m_obj,state,dT,dlps,dchi,dpsi,dq,tf.cast(dt,np.csingle),m_obj.imp_inv)
-
-	# use initial step to update the rate of change for the nonlinear terms
-	dchi2, dpsi2, dT2, dlps2, dq2 = rate_of_change(m_obj,newstate)
-	if m_obj.do_physics:
-		dq2=dq2+dq_phys
-		dT2=dT2+dT_phys
-
-	dchi= (dchi+dchi2)/2
-	dpsi= (dpsi+dpsi2)/2
-	dT= (dT+dT2)/2
-	dlps= (dlps+dlps2)/2
-	dq= (dq+dq2)/2
-
-	# calculated averaged rate of change for the linear terms
-	L_chi, L_psi, L_T, L_lps,L_q = linear(m_obj,state)
-	L_chi2, L_psi2, L_T2, L_lps2,L_q2 = linear(m_obj,newstate)
-	L_chi = (L_chi+L_chi2)/2
-	L_T = (L_T+L_T2)/2
-	L_lps = (L_lps+L_lps2)/2
-
-	# do a fully explicit step using new rate of change
-	state=explicit_step(m_obj,state,dT+L_T,dlps+L_lps,dchi+L_chi,dpsi+L_psi,dq+L_q,tf.cast(dt,np.csingle))
-
 	return state
 

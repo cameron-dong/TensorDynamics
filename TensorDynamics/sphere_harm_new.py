@@ -1,3 +1,5 @@
+''' Functions and python object for spherical harmonic transformations'''
+
 import tensorflow as tf
 import numpy as np
 from scipy.special import roots_legendre
@@ -96,7 +98,6 @@ def calc_am_u(data,trunc):
 	Args:
 		data: tensor with dimensions (level,latitude,longitude)
 		trunc: integer truncation limit
-
 	Returns:
 		fourier_coeffs: tensor with dimensions (level, latitude, zonal wavenumber)
 
@@ -262,7 +263,6 @@ class sh_obj:
 
 		Args:
 			amn:tensor with dimensions (level, zonal wavenumber, total wavenumber)
-
 		Returns:
 			lambda_deriv: tensor with dimensions (level, zonal wavenumber, total wavenumber)
 		"""
@@ -275,7 +275,6 @@ class sh_obj:
 		Calculate spherical harmonic coefficients corresponding to the laplacian
 		Args:
 			amn:tensor with dimensions (level, zonal wavenumber, total wavenumber)
-
 		Returns:
 			laplace_vals: tensor with dimensions (level, zonal wavenumber, total wavenumber)
 		"""
@@ -289,7 +288,6 @@ class sh_obj:
 
 		Args:
 			amn:tensor with dimensions (level, zonal wavenumber, total wavenumber)
-
 		Returns:
 			tensor with dimensions (level, latitude, longitude)
 		"""
@@ -301,7 +299,6 @@ class sh_obj:
 
 		Args:
 			amn:tensor with dimensions (level, zonal wavenumber, total wavenumber)
-
 		Returns:
 			tensor with dimensions (level, latitude, longitude)
 		"""
@@ -313,7 +310,6 @@ class sh_obj:
 
 		Args:
 			amn:tensor with dimensions (level, zonal wavenumber, total wavenumber)
-
 		Returns:
 			x_deriv_vals: tensor with dimensions (level, latitude, longitude)
 			y_deriv_vals: tensor with dimensions (level, latitude, longitude)
@@ -327,7 +323,6 @@ class sh_obj:
 		Calculate spherical harmonic coefficients corresponding to the inverse laplacian
 		Args:
 			amn:tensor with dimensions (level, zonal wavenumber, total wavenumber)
-
 		Returns:
 			inv_laplace_vals: tensor with dimensions (level, zonal wavenumber, total wavenumber)
 		"""

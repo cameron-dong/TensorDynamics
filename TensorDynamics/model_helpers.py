@@ -1,3 +1,6 @@
+''' Helper functions for creating the dynamical model python object'''
+
+
 import numpy as np
 import tensorflow as tf
 import TensorDynamics.constants as constants

@@ -1,3 +1,5 @@
+'''Definition of dynamical model python class and timestepping wrapper'''
+
 import numpy as np
 import tensorflow as tf
 import TensorDynamics.sphere_harm_new as sh
@@ -5,13 +7,12 @@ import TensorDynamics.sphere_harm_new as sh
 from TensorDynamics.timestepper import leap_step, SIL3, heuns_step
 import TensorDynamics.constants as constants
 from TensorDynamics.model_helpers import get_levels, get_matrices, vdiff_inds
-
+from TensorDynamics.parameterizations import all_params, grid_vars
 
 A=constants.A_EARTH #radius of earth
 A2=A*A
 OMEGA=constants.OMEGA
 MU_Q=0.60779
-
 
 ######################################################################################
 class model:
@@ -36,12 +37,15 @@ class model:
 		H_mat: tensor with dimensions (levels, levels)
 		imp_inv: tensor with dimensions (levels, levels, total_wavenumber, zonal wavenumber)
 		imp_inv_eul: tensor with dimensions (levels, levels, total_wavenumber, zonal wavenumber)
-		inds:
-		pinds:
-		ninds:
+		inds: useful index np.array for vertical differences
+		pinds: useful index np.array for vertical differences
+		ninds: useful index np.array for vertical differences
+		self.param_list: list of parameterization functions to use
+		self.physics_to_grid: list of grid variables needed for parameterizations
+		self.do_physics: bool - whether to use physics params or not
 	"""
 
-	def __init__(self,nlats: int, trunc: int, nlevels: int, int_type="leap",do_physics=False):
+	def __init__(self,nlats: int, trunc: int, nlevels: int, int_type="leap",physics_list=[]):
 		""" Initialize a primitive equations model object, set internal parameters
 		
 		Args:
@@ -49,7 +53,6 @@ class model:
 			trunc: spherical harmonic truncation limit
 			nlevels: number of vertical sigma levels
 		"""
-		self.do_physics=do_physics
 
 		# create a spherical harmonic grid object, then calculate planetary vorticity
 		self.f_obj=sh.sh_obj(nlats,trunc)
@@ -89,8 +92,21 @@ class model:
 
 		# some index arrays that are useful for the vertical differences
 		self.inds, self.pinds, self.ninds = vdiff_inds(nlevels)
+
+		# create list of selected physics parameterizations and needed grid variables
+		self.param_list=[]
+		needed_grid=[]
+		if len(physics_list)!=0:
+			for param_name in physics_list:
+				self.param_list.append(all_params[param_name])
+				needed_grid.append(grid_vars[param_name])
+
+			self.physics_to_grid = np.unique(np.concatenate(needed_grid),axis=0)
+			self.do_physics=True
+		else:
+			self.do_physics=False
 	
-	def stepper(self,runtime,cstate,output_interval=None):
+	def stepper(self,runtime,cstate,output_interval=None,savename=None):
 		"""
 		Step model forward by period "runtime" from current state of the atmosphere "cstate"
 		
@@ -118,7 +134,7 @@ class model:
 				if output_interval is not None:
 					if ((i+1)*self.dt/3600)%output_interval==0: # if output interval is reached, save output
 						outputs.append(self.decode(cstate_amn))
-
+						
 		elif self.int_type=="leap":
 			ostate_amn=self.encode(cstate) # create dictionary for holding previous step
 			for i in tf.range(nsteps):
@@ -129,6 +145,7 @@ class model:
 				if output_interval is not None:
 					if ((i+1)*self.dt/3600)%output_interval==0: # if output interval is reached, save output
 						outputs.append(self.decode(cstate_amn))
+
 
 		# decode final state
 		end_state=self.decode(cstate_amn)
@@ -151,12 +168,12 @@ class model:
 		"""
 		
 		# convert grid values to spherical harmonic basis
-		U_amn=tf.Variable(self.UV_obj.calc_sh_coeffs(mstate["u_component_of_wind"]*self.coslats/A),trainable=False)
-		V_amn=tf.Variable(self.UV_obj.calc_sh_coeffs(mstate["v_component_of_wind"]*self.coslats/A),trainable=False)
-		lps_amn=tf.Variable(self.f_obj.calc_sh_coeffs(tf.math.log(mstate["surface_pressure"])),trainable=False)
-		T_amn=tf.Variable(self.f_obj.calc_sh_coeffs(mstate["temperature"]),trainable=False)
-		Zs_amn=tf.Variable(self.f_obj.calc_sh_coeffs(mstate["geopotential_at_surface"]),trainable=False)	
-		Q_amn=tf.Variable(self.f_obj.calc_sh_coeffs(mstate["specific_humidity"]*MU_Q),trainable=False)	
+		U_amn=tf.constant(self.UV_obj.calc_sh_coeffs(mstate["u_component_of_wind"]*self.coslats/A),dtype=np.csingle)
+		V_amn=tf.constant(self.UV_obj.calc_sh_coeffs(mstate["v_component_of_wind"]*self.coslats/A),dtype=np.csingle)
+		lps_amn=tf.constant(self.f_obj.calc_sh_coeffs(tf.math.log(mstate["surface_pressure"])),dtype=np.csingle)
+		T_amn=tf.constant(self.f_obj.calc_sh_coeffs(mstate["temperature"]),dtype=np.csingle)
+		Zs_amn=tf.constant(self.f_obj.calc_sh_coeffs(mstate["geopotential_at_surface"]),dtype=np.csingle)	
+		Q_amn=tf.constant(self.f_obj.calc_sh_coeffs(mstate["specific_humidity"]*MU_Q),dtype=np.csingle)	
 
 
 		# calculate vorticity and divergence in grid space
@@ -166,10 +183,10 @@ class model:
 		vort =  A*(v_grad_x - u_grad_y)/self.coslats
 
 		# calculate streamfunction and velocity potential in spherical harmonic space
-		vort=tf.Variable(self.f_obj.calc_sh_coeffs(vort),trainable=False)
-		div=tf.Variable(self.f_obj.calc_sh_coeffs(div),trainable=False)
-		psi_amn=tf.Variable(self.f_obj.inverse_laplace(vort)/A2,trainable=False)
-		chi_amn=tf.Variable(self.f_obj.inverse_laplace(div)/A2,trainable=False)
+		vort=tf.constant(self.f_obj.calc_sh_coeffs(vort),dtype=np.csingle)
+		div=tf.constant(self.f_obj.calc_sh_coeffs(div),dtype=np.csingle)
+		psi_amn=tf.constant(self.f_obj.inverse_laplace(vort)/A2,dtype=np.csingle)
+		chi_amn=tf.constant(self.f_obj.inverse_laplace(div)/A2,dtype=np.csingle)
 		
 		# create dictionary
 		state_amn={"lps_amn":lps_amn,"psi_amn":psi_amn,"chi_amn":chi_amn,"T_amn":T_amn,"Zs_amn":Zs_amn,"Q_amn":Q_amn}
