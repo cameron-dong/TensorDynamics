@@ -2,10 +2,9 @@
 
 TensorDynamics is an atmospheric dynamical core implemented in Tensorflow for usage with GPU's. It solves the primitive equations on sigma levels using Eulerian spherical harmonic transforms. Execution time is approximately 1.5 seconds per model day on an Nvidia 3060 GPU at T85 horizontal resolution with 25 vertical levels.
 
-Examples: baroclinic_instability.ipynb, ERA5_forecasting.ipynb
+Examples: baroclinic_instability.ipynb, ERA5_forecasting.ipynb, held_suarez.ipynb
 
-
-TODO: Held-Suarez test case. Physical parameterizations for convection and radiation. Test autodifferentiation.
+TODO: Physical parameterizations for convection and radiation. Test autodifferentiation.
 
 
 Model formulation is based on relevant section in the following sources:
