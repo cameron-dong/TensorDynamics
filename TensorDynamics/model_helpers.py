@@ -105,7 +105,7 @@ def get_levels(nlevels):
 
 	alphas=np.array(sigmas)
 	alphas[-1]=(-np.log(sigmas[-1]))
-	alphas[0:-1]=(0.5*np.log(sigmas[1:]/sigmas[:-1]))
+	alphas[0:nlevels-1]=(0.5*np.log(sigmas[1:]/sigmas[:-1]))
 	alphas=tf.constant(alphas,dtype=np.single)
 	
 	T_bar=tf.constant(sigmas*0+300,dtype=np.single)

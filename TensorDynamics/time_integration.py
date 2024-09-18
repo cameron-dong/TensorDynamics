@@ -129,7 +129,7 @@ def euler(m_obj,state,derivs,dt,imp_inv):
 	output={}
 	padding=tf.constant([[0,0],[1,0],[0,0]])
 
-	output["Q_amn"]=(state["Q_amn"][:]+dt*dq[:])
+	output["Q_amn"]=(state["Q_amn"][:]+dt*derivs["Q_amn"][:])
 	
 	# calculation of terms for evolving velocity potential
 	h_old=state["Zs_amn"][None,:,:,:]+mat_mul_2(m_obj.G_mat,state["T_amn"][None,:,:,:])
@@ -137,19 +137,19 @@ def euler(m_obj,state,derivs,dt,imp_inv):
 	h_old = h_old +tf.cast(m_obj.T_barw,np.csingle)*mat_mul_2(m_obj.G_mat,Q_avg[None,:,:,:])
 
 	tmp=((dt/2)*(h_old+tf.cast(R*m_obj.T_barw[None,:],np.csingle)*state["lps_amn"][None,:,:,:])
-		+(dt/2)*(dt/2)*(mat_mul_2(m_obj.G_mat,dT[None,:,:,:])+tf.cast(R*m_obj.T_barw[None,:],np.csingle)*dlps[None,:,:,:]))/A2	
-	tmp2=((-state["chi_amn"][None,:,1:,:]+(dt/2)*dchi[None,:,1:,:]/tf.cast(m_obj.n2[1:],np.csingle)+tmp[:,:,1:]))
+		+(dt/2)*(dt/2)*(mat_mul_2(m_obj.G_mat,derivs["T_amn"][None,:,:,:])+tf.cast(R*m_obj.T_barw[None,:],np.csingle)*derivs["lps_amn"][None,:,:,:]))/A2	
+	tmp2=((-state["chi_amn"][None,:,1:,:]+(dt/2)*derivs["chi_amn"][None,:,1:,:]/tf.cast(m_obj.n2[1:],np.csingle)+tmp[:,:,1:]))
 
 	output["chi_amn"]=tf.pad((-state["chi_amn"][:,1:,:]-(2*mat_mul_4(imp_inv[:,:,1:],tmp2)))[0],padding)
 
 	# trapezoidal calculation of divergence
 	D = -tf.cast(m_obj.n2,np.csingle)*(state["chi_amn"]+output["chi_amn"])/2
 	
-	output["T_amn"]=(tf.squeeze(state["T_amn"][:]+dt*(dT[:]-(mat_mul_2(m_obj.H_mat,D[None,:,:,:])))))
+	output["T_amn"]=(tf.squeeze(state["T_amn"][:]+dt*(derivs["T_amn"][:]-(mat_mul_2(m_obj.H_mat,D[None,:,:,:])))))
 	
-	output["lps_amn"]=state["lps_amn"]+tf.pad(dt*(dlps[:,1:]-(mat_mul_2(m_obj.dsigs[None,:],D[None,:,1:,:])))[0],padding)
+	output["lps_amn"]=state["lps_amn"]+tf.pad(dt*(derivs["lps_amn"][:,1:]-(mat_mul_2(m_obj.dsigs[None,:],D[None,:,1:,:])))[0],padding)
 
-	output["psi_amn"]=state["psi_amn"]-tf.pad(dt*dpsi[:,1:]/tf.cast(m_obj.n2[1:],np.csingle),padding)
+	output["psi_amn"]=state["psi_amn"]-tf.pad(dt*derivs["psi_amn"][:,1:]/tf.cast(m_obj.n2[1:],np.csingle),padding)
 
 	output["Zs_amn"]=state["Zs_amn"]
 	return output

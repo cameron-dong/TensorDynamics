@@ -103,6 +103,8 @@ def calc_am_u(data,trunc):
 
 	'''
 	fourier_coeffs=tf.signal.rfft(data)[:,:,:trunc+1]
+	#fourier_coeffs=tf.signal.rfft(data)[...,:trunc+1]
+
 	return fourier_coeffs
 
 def calc_UV(m,n,psi_amn,chi_amn,trunc=tf.constant(42)):
@@ -235,6 +237,8 @@ class sh_obj:
 
 		# compute gaussian quadrature
 		amn=gauss_quad(am_u[:,:,None,:]*(self.legfuncs[None,:,:,:]),self.weights[:,:,:,None])
+		#amn=gauss_quad(am_u[...,:,None,:]*(self.legfuncs[:,:,:]),self.weights[:,:,:,None])
+
 		return amn
 
 	def eval(self,amn,legfuncs):
@@ -249,6 +253,7 @@ class sh_obj:
 		"""
 
 		output=(tf.signal.irfft(tf.math.reduce_sum((legfuncs*amn[:,None,:,:]),axis=-2),fft_length=tf.shape(self.lons)))
+		#output=(tf.signal.irfft(tf.math.reduce_sum((legfuncs*amn[...,None,:,:]),axis=-2),fft_length=tf.shape(self.lons)))
 		return output
 
 

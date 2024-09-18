@@ -121,9 +121,9 @@ def euler_step(m_obj,dt,state):
 	explicit_derivs = rate_of_change(m_obj,state)
 	
 	if m_obj.do_physics:
-		dq_phys, dT_phys = physics(m_obj,state)
-		dq=dq+dq_phys
-		dT=dT+dT_phys
+		p_derivs = physics(m_obj,state)		
+		for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			explicit_derivs[vari]=explicit_derivs[vari]+p_derivs[vari[:-4]]
 	
 	# do semi-implicit forward euler step
 	state=euler(m_obj,state,explicit_derivs,tf.cast(dt,np.csingle),m_obj.imp_inv_eul)
@@ -154,94 +154,66 @@ def SIL3(m_obj,dt,state):
 	# weights for 3-cycle
 	weights=[1,3/2,3]
 
-	# placeholder dictionary to hold onto current state
-	start_state={}
-	start_state["chi_amn"]=tf.identity(state["chi_amn"])
-	start_state["psi_amn"]=tf.identity(state["psi_amn"])
-	start_state["T_amn"]=tf.identity(state["T_amn"])
-	start_state["lps_amn"]=tf.identity(state["lps_amn"])
-	start_state["Q_amn"]=tf.identity(state["Q_amn"])
-	start_state["Zs_amn"]=tf.identity(state["Zs_amn"])
-
 	####################### FIRST CYCLE
 	# calculate explicit terms
 	explicit_derivs = rate_of_change(m_obj,state)
-	dchi, dpsi, dT, dlps, dq = add_diffusion_tend(m_obj,state,dchi, dpsi, dT, dlps, dq)
+	explicit_derivs = add_diffusion_tend(m_obj,state,explicit_derivs)
 	if m_obj.do_physics:
-		dq_phys, dT_phys = physics(m_obj,state)
-		dq=dq+dq_phys
-		dT=dT+dT_phys
+		p_derivs = physics(m_obj,state)		
+		for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			explicit_derivs[vari]=explicit_derivs[vari]+p_derivs[vari[:-4]]
 
 	# instead of trapezoidal, do a modified backward euler
-	newstate=euler_BE(m_obj,state,dT,dlps,dchi,dpsi,dq,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
+	newstate=euler_BE(m_obj,state,explicit_derivs,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
 
 	# calculate linear terms, then perform a fully explicit step
-	L_chi, L_psi, L_T, L_lps,L_q = linear(m_obj,state)
-	L_chi2, L_psi2, L_T2, L_lps2,L_q2 = linear(m_obj,newstate)
-	L_chi = (L_chi+L_chi2)/2
-	L_T = (L_T+L_T2)/2
-	L_lps = (L_lps+L_lps2)/2
+	lin_derivs = linear(m_obj,state)
+	lin_derivs2 = linear(m_obj,newstate)
 
-	state=explicit_step(m_obj,state,dT+L_T,dlps+L_lps,dchi+L_chi,dpsi+L_psi,dq+L_q,tf.cast(dt/3,np.csingle))
+	total_derivs={}
+	for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+		total_derivs[vari]= explicit_derivs[vari]+(lin_derivs[vari]+lin_derivs2[vari])/2
+
+	newstate=explicit_step(m_obj,state,total_derivs,tf.cast(dt/3,np.csingle))
 
 	#################################### SECOND CYCLE
-	dchi2, dpsi2, dT2, dlps2, dq2 = rate_of_change(m_obj,state)
-	dchi2, dpsi2, dT2, dlps2, dq2= add_diffusion_tend(m_obj,state,dchi2, dpsi2, dT2, dlps2, dq2)
+	explicit_derivs2 = rate_of_change(m_obj,state)
+	explicit_derivs2 = add_diffusion_tend(m_obj,state,explicit_derivs2)
 
 	if m_obj.do_physics:
-		dq_phys, dT_phys = physics(m_obj,state)
-		dq2=dq2+dq_phys
-		dT2=dT2+dT_phys
+		p_derivs = physics(m_obj,newstate)		
+		for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			explicit_derivs2[vari]=explicit_derivs2[vari]+p_derivs[vari[:-4]]
 	w=weights[1]
 
-	L_chi, L_psi, L_T, L_lps,L_q = linear(m_obj,start_state)
-	L_chi2, L_psi2, L_T2, L_lps2,L_q2 = linear(m_obj,state)
-	L_chi = (L_chi-L_chi2)/2
-	L_T = (L_T-L_T2)/2
-	L_lps = (L_lps-L_lps2)/2
+	for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+		explicit_derivs[vari]= (1-w)*explicit_derivs[vari]+w*explicit_derivs2[vari] + (lin_derivs[vari]-lin_derivs2[vari])/2
 
-	dchi = ((1-w)*dchi+w*dchi2)#+L_chi
-	dpsi = ((1-w)*dpsi+w*dpsi2)
-	dT = ((1-w)*dT+w*dT2)#+L_T
-	dlps = ((1-w)*dlps+w*dlps2)#+L_lps
-	dq = ((1-w)*dq+w*dq2)
-
-	state=euler_BE(m_obj,state,dT,dlps,dchi,dpsi,dq,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
+	newstate=euler_BE(m_obj,newstate,explicit_derivs,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
 
 	########################################### THIRD CYCLE
-	dchi3, dpsi3, dT3, dlps3, dq3 = rate_of_change(m_obj,state)
-	dchi3, dpsi3, dT3, dlps3, dq3= add_diffusion_tend(m_obj,state,dchi3, dpsi3, dT3, dlps3, dq3)
+	explicit_derivs3 = rate_of_change(m_obj,newstate)
+	explicit_derivs3 = add_diffusion_tend(m_obj,newstate,explicit_derivs3)
 
 	if m_obj.do_physics:
-		dq_phys, dT_phys = physics(m_obj,state)
-		dq3=dq3+dq_phys
-		dT3=dT3+dT_phys
+		p_derivs = physics(m_obj,newstate)		
+		for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+			explicit_derivs3[vari]=explicit_derivs3[vari]+p_derivs[vari[:-4]]
 	w=weights[2]
 
-	dchi = ((1-w)*dchi+w*dchi3)
-	dpsi = ((1-w)*dpsi+w*dpsi3)
-	dT = ((1-w)*dT+w*dT3)
-	dlps = ((1-w)*dlps+w*dlps3)
-	dq = ((1-w)*dq+w*dq3)
+	for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+		explicit_derivs[vari]= (1-w)*explicit_derivs[vari]+w*explicit_derivs3[vari]
 
-	newstate=euler_BE(m_obj,state,dT,dlps,dchi,dpsi,dq,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
+	tmp_state=euler_BE(m_obj,newstate,explicit_derivs,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
 
-	L_chi, L_psi, L_T, L_lps,L_q = linear(m_obj,start_state)
-	L_chi2, L_psi2, L_T2, L_lps2,L_q2 = linear(m_obj,state)
-	L_chi3, L_psi3, L_T3, L_lps3,L_q3 = linear(m_obj,newstate)
+	lin_derivs_3 = linear(m_obj,newstate)
+	lin_derivs_4 = linear(m_obj,tmp_state)
 
-	L_chi = ((L_chi+L_chi2)/2-L_chi3)/4
-	L_T = ((L_T+L_T2)/2-L_T3)/4
-	L_lps = ((L_lps+L_lps2)/2-L_lps3)/4
+	for vari in ["psi_amn","T_amn","chi_amn","lps_amn","Q_amn"]:
+		explicit_derivs[vari]= explicit_derivs[vari]+((lin_derivs[vari]+lin_derivs_3[vari])/2-lin_derivs_4[vari])/4
 
-	c=1
-	dchi=c*dchi+L_chi
-	dpsi=c*dpsi+L_psi
-	dT=c*dT+L_T
-	dlps=c*dlps+L_lps
-	dq=c*dq+L_q
 
-	state=euler_BE(m_obj,state,dT,dlps,dchi,dpsi,dq,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
+	newstate=euler_BE(m_obj,newstate,explicit_derivs,tf.cast(dt/3,np.csingle),m_obj.imp_inv_SIL3)
 	
-	return state
+	return newstate
 

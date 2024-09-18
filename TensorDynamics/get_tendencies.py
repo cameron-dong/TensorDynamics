@@ -51,7 +51,7 @@ def rate_of_change(m_obj,state):
 
 	return explicit
 
-def add_diffusion_tend(m_obj,state,dchi, dpsi, dT, dlps, dq):  #### UPDATE TO USE A DICTIONARY LIKE OTHER FUNCTIONS
+def add_diffusion_tend(m_obj,state,derivs):  #### UPDATE TO USE A DICTIONARY LIKE OTHER FUNCTIONS
 	'''
 	Calculates diffusion for each variable and adds to existing tendency values
 
@@ -65,16 +65,18 @@ def add_diffusion_tend(m_obj,state,dchi, dpsi, dT, dlps, dq):  #### UPDATE TO US
 	Returns:
 		updated time derivatives, with diffusion added to the tendency
 	'''
+	output={}
 	K=m_obj.DIFFUSION_CONST
 	order=m_obj.DIFFUSION_ORDER
 
 	# add diffusion to the tendencies
-	dchi=dchi-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order-(2/A2)**order)*state["chi_amn"]*tf.cast(-m_obj.n2[:],dtype=np.csingle)
-	dpsi=dpsi-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order-(2/A2)**order)*state["psi_amn"]*tf.cast(-m_obj.n2[:],dtype=np.csingle)
-	dT=dT-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order)*state["T_amn"]
-	dq=dq-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order)*state["Q_amn"]
+	output["chi_amn"]=derivs["chi_amn"]-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order-(2/A2)**order)*state["chi_amn"]*tf.cast(-m_obj.n2[:],dtype=np.csingle)
+	output["psi_amn"]=derivs["psi_amn"]-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order-(2/A2)**order)*state["psi_amn"]*tf.cast(-m_obj.n2[:],dtype=np.csingle)
+	output["T_amn"]=derivs["T_amn"]-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order)*state["T_amn"]
+	output["Q_amn"]=derivs["Q_amn"]-2*K*(tf.cast(-m_obj.n2[:]/A2,np.csingle)**order)*state["Q_amn"]
+	output["lps_amn"]=derivs["lps_amn"]
 
-	return dchi, dpsi, dT, dlps, dq
+	return output
 
 def linear(m_obj,state):
 	'''
